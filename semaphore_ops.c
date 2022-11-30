@@ -1,95 +1,64 @@
 #include <sys/sem.h>
-#include<signal.h>
-#include<unistd.h>
-#include<fcntl.h>
+#include <signal.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <stdlib.h>
 #include "auxiliary_functions.h"
 
-#define BUF_SIZE 1024
-
-void down_semaphore(int semaphore_id)
-{
-    struct sembuf sem_op;
-
-    /* wait on the semaphore, unless it's value is non-negative. */
-    sem_op.sem_num = 0;
-    sem_op.sem_op = -1;
-    sem_op.sem_flg = 0;
-    semop(semaphore_id, &sem_op, 1);
+void down_semaphore(int semaphore_id){
+    struct sembuf semop_metadata;
+    semop_metadata.sem_num = 0;
+    semop_metadata.sem_op = -1;     //signal down on semaphore
+    semop_metadata.sem_flg = 0;
+    semop(semaphore_id, &semop_metadata, 1); //wait on semaphore unless it's been signaled up
 }
 
-void up_semaphore(int semaphore_id)
-{
-    struct sembuf sem_op;
-
-    /* signal the semaphore - increase its value by one. */
-    sem_op.sem_num = 0;
-    sem_op.sem_op = 1;
-    sem_op.sem_flg = 0;
-    semop(semaphore_id, &sem_op, 1);
+void up_semaphore(int semaphore_id){
+    struct sembuf semop_metadata;
+    semop_metadata.sem_num = 0;
+    semop_metadata.sem_op = 1;      //signal up on semaphore
+    semop_metadata.sem_flg = 0;
+    semop(semaphore_id, &semop_metadata, 1);
 }
 
-void consumer_op(pid_t pid, int semaphore_id, ssize_t* bytes_copied, char* buffer, char* file)
-{
-  
-    int fd;
-    ssize_t nwrite, nread;
-
-    fd = open(file, O_WRONLY | O_CREAT | O_EXCL, 0666);
-    if (fd < 0) {
-        perror("consumer:");
-        return;
-    }
-
-	do
-    {
-      	random_delay();        /* Wait for producer to write to shared buffer */
-        down_semaphore(semaphore_id); /* Lock the resource */ 
-        nread = *bytes_copied;
-        if(nread > 0) {
-            nwrite = write(fd, buffer, nread);
-        	/* printf("\nconsumer write: %d bytes", nwrite); */
-        	kill(pid, SIGUSR2);    /* Send signal to main process */
+void consumer_op(int semaphore_id, pid_t pid, char* buffer, char* filename, ssize_t* copy_data_size){
+    int consumer_fd = open_error_report(filename, O_WRONLY | O_CREAT | O_EXCL, 0666);
+    ssize_t current_copy_size;
+	do{
+      	rand_delay(1);        //wait for producer with random delay
+        down_semaphore(semaphore_id); //signal down on semaphore to lock buffer
+        current_copy_size = *copy_data_size;
+        if(current_copy_size > 0){
+            write(consumer_fd, buffer, current_copy_size);
+        	kill(pid, SIGUSR2);    //send kill signal
         }
-        *bytes_copied = 0;
-      	up_semaphore(semaphore_id);
-    }
-	while (nread >= 0);
+        *copy_data_size = 0;
+      	up_semaphore(semaphore_id); //signal up on semaphore to unlock buffer
+    }while(current_copy_size >= 0);
   
-  	close(fd);
-    kill(pid, SIGUSR2);  /* After the file is copied, send signal to main */
-    random_delay(); random_delay();
-    kill(pid, SIGUSR2);  /* After the file is copied, send signal to main */
+  	close(consumer_fd);  //close file
+    kill(pid, SIGUSR2);  //send kill signal after file has been copied
+    rand_delay(2);
+    kill(pid, SIGUSR2);  //send second kill signal
 }
 
-void producer_op(pid_t pid, int semaphore_id, ssize_t* bytes_copied, char* buffer, char* file)
-{
-  
-    int fd;
-    ssize_t nread;
+void producer_op(int semaphore_id, pid_t pid, char* buffer, char* filename, ssize_t* copy_data_size){
+    int producer_fd = open_error_report(filename, O_RDONLY, -1);
 
-    fd = open(file, O_RDONLY);
-    if (fd < 0) {
-        perror("producer:");
-        return;
-    }
-
-    do {
-    	down_semaphore(semaphore_id);   /* Lock the shared resource */
-        nread = 1;
-        if(*bytes_copied == 0) {
-            nread = read(fd, buffer, BUF_SIZE);
-            if(nread > 0)
-                *bytes_copied = nread;
+    ssize_t read_size;
+    do{
+    	down_semaphore(semaphore_id);   //signal down on semaphore to lock buffer
+        read_size = 1;
+        if(*copy_data_size == 0){
+            read_size = read(producer_fd, buffer, 1024);
+            if(read_size > 0)
+                *copy_data_size = read_size;
             else
-                *bytes_copied = -1;
-            /* printf("\nproducer read: %d bytes", nread); */
-        	kill(pid, SIGUSR1); /* Send signal to main process */
+                *copy_data_size = -1;
+            kill(pid, SIGUSR1); //send kill signal
         }  
-    	up_semaphore(semaphore_id);
-		random_delay();     /* Wait for consumer to read from shared resource */
-    }
-    while(nread > 0);
-
-    close(fd);
-
+    	up_semaphore(semaphore_id); //signal up on semaphore to unlock buffer
+		rand_delay(1);
+    }while(read_size > 0);
+    close(producer_fd);
 }

@@ -13,4 +13,4 @@ main.o:
 	$(CC) $(CFLAGS) -c main.c
 
 clean:
-	$(RM) output *.o file2
+	$(RM) output *.o dest*
